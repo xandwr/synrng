@@ -2,6 +2,24 @@
 -- Interactive node graph visualization for all synergy components
 -- Handles sequence configuration, rolling/unlocking, and visual display
 
+-- ========================================
+-- UTILITY
+-- ========================================
+
+function GetRarityTier(rarityName)
+    local RarityOrder = {
+        -- Ensure these string keys match exactly what's in SynergyComponentsDB.Rarities (e.g., "COMMON", "UNCOMMON")
+        COMMON = 0,
+        UNCOMMON = 1,
+        RARE = 2,
+        EPIC = 3,
+        LEGENDARY = 4,
+        MYTHICAL = 5
+    }
+    return RarityOrder[string.upper(rarityName)] -- Convert to uppercase to be safe, as DB keys are uppercase
+end
+
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -30,7 +48,8 @@ local CONFIG = {
     LOCKED_TRANSPARENCY = 0.7,
     UNLOCKED_TRANSPARENCY = 0.2,
     SELECTED_GLOW_SIZE = 1.2,
-    CONNECTION_THICKNESS = 2,
+    CONNECTION_THICKNESS = 4,
+    CONNECTION_BORDER_THICKNESS = 8,
     CONNECTION_TRANSPARENCY = 0.85,
     
     -- Animation Settings
@@ -110,6 +129,9 @@ function InitializeAstralWeb()
     
     -- Build node graph
     BuildNodeGraph()
+
+    -- Create the connections between nodes
+    CreateDirectedNodeConnections()
     
     -- Create sequence builder
     CreateSequenceBuilder()
@@ -178,10 +200,11 @@ function CreateMainUI()
     -- Main container frame
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "AstralWebMain"
-    mainFrame.Size = UDim2.new(1, 0, 1, 0)
-    mainFrame.Position = UDim2.new(0, 0, 0, 0)
+    mainFrame.Size = UDim2.new(0.8, 0, 0.8, 0)
+    mainFrame.Position = UDim2.new(0.1, 0, 0.2, 0)
     mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 20)
-    mainFrame.BorderSizePixel = 0
+    mainFrame.BorderColor3 = Color3.fromRGB(100, 100, 200)
+    mainFrame.BorderSizePixel = 4
     mainFrame.Parent = screenGui
     
     -- Graph viewport (not scrollable - we'll pan manually)
@@ -201,13 +224,14 @@ function CreateMainUI()
     graphCanvas.Position = UDim2.new(0.5, -CONFIG.GRAPH_RADIUS * 3, 0.5, -CONFIG.GRAPH_RADIUS * 3)
     graphCanvas.BackgroundTransparency = 1
     graphCanvas.Parent = graphViewport
+    graphCanvas.AnchorPoint = Vector2.new(0,0)
 
     local graphScale = Instance.new("UIScale")
     graphScale.Name = "GraphScale"
     graphScale.Parent = graphCanvas
     
     -- Add starfield background to viewport
-    CreateStarfieldBackground(graphViewport)
+    -- CreateStarfieldBackground(graphViewport)
     
     -- Connections layer (behind nodes)
     local connectionsLayer = Instance.new("Frame")
@@ -215,6 +239,8 @@ function CreateMainUI()
     connectionsLayer.Size = UDim2.new(1, 0, 1, 0)
     connectionsLayer.BackgroundTransparency = 1
     connectionsLayer.Parent = graphCanvas
+    connectionsLayer.AnchorPoint = Vector2.new(0,0) -- Explicitly set
+    connectionsLayer.Position = UDim2.new(0,0,0,0) -- Explicitly set
     
     -- Nodes layer
     local nodesLayer = Instance.new("Frame")
@@ -516,35 +542,149 @@ function CreateConnectionLine(nodeId1, nodeId2, transparency)
     local nodeFrame1 = AstralWebState.NodeFrames[nodeId1]
     local nodeFrame2 = AstralWebState.NodeFrames[nodeId2]
 
-    if not nodeFrame1 or not nodeFrame2 then return end
+    local pos1 = AstralWebState.NodePositions[nodeId1] -- Center of source node in GraphCanvas unscaled space
+    local pos2 = AstralWebState.NodePositions[nodeId2] -- Center of target node in GraphCanvas unscaled space
 
-    local canvasAbs = AstralWebState.GraphCanvas.AbsolutePosition
+    if not nodeFrame1 or not nodeFrame2 or not pos1 or not pos2 then
+        print(string.format("CreateConnectionLine: Missing frame or position for connection between %s and %s", tostring(nodeId1), tostring(nodeId2)))
+        return
+    end
 
-    local center1 = nodeFrame1.AbsolutePosition + (nodeFrame1.AbsoluteSize / 2)
-    local center2 = nodeFrame2.AbsolutePosition + (nodeFrame2.AbsoluteSize / 2)
-
-    local x1 = center1.X - canvasAbs.X
-    local y1 = center1.Y - canvasAbs.Y
-    local x2 = center2.X - canvasAbs.X
-    local y2 = center2.Y - canvasAbs.Y
+    -- Coordinates are relative to GraphCanvas's top-left (0,0)
+    local x1, y1 = pos1.X, pos1.Y
+    local x2, y2 = pos2.X, pos2.Y
     
-    local distance = math.sqrt((x2-x1)^2 + (y2-y1)^2)
-    local angle = math.atan2(y2-y1, x2-x1)
+    local deltaX = x2 - x1
+    local deltaY = y2 - y1
+    
+    -- Calculate distance and angle in the unscaled 2D plane of the GraphCanvas
+    local distance = math.sqrt(deltaX^2 + deltaY^2)
+    
+    -- If nodes are at the exact same position, don't draw a line
+    if distance < 0.1 then -- Using a small epsilon instead of == 0
+        return 
+    end
+    
+    local angleRadians = math.atan2(deltaY, deltaX)
+    local angleDegrees = math.deg(angleRadians)
     
     local line = Instance.new("Frame")
-    line.Name = "Connection"
-    line.Size = UDim2.new(0, distance, 0, CONFIG.CONNECTION_THICKNESS)
-    line.Position = UDim2.new(0, x1, 0, y1)
-    line.AnchorPoint = Vector2.new(0, 0.5)
-    line.BackgroundColor3 = Color3.fromRGB(100, 100, 150)
-    line.BackgroundTransparency = transparency or 0.5
-    line.BorderSizePixel = 0
-    line.Rotation = math.deg(angle)
-    line.Parent = AstralWebState.ConnectionsLayer
+    line.Name = "Connection_" .. nodeId1 .. "_to_" .. nodeId2
     
-    -- Store connection
-    local key = nodeId1 .. "-" .. nodeId2
+    -- The Parent must be set before setting UDim2 properties if there's any doubt,
+    -- though usually Roblox handles it. Let's be safe.
+    line.Parent = AstralWebState.ConnectionsLayer 
+
+    line.AnchorPoint = Vector2.new(0, 0)
+    
+    -- Position this AnchorPoint at the center of the source node (x1, y1)
+    -- These x1, y1 values are pixel offsets in the unscaled GraphCanvas space.
+    -- UIScale on ConnectionsLayer's parent will handle scaling these values visually.
+    line.Position = UDim2.new(0, x1, 0, y1 - CONFIG.CONNECTION_THICKNESS/2)
+    line.Size     = UDim2.new(0, distance, 0, CONFIG.CONNECTION_THICKNESS)
+    line.Rotation = angleDegrees
+    
+    line.BackgroundColor3 = Color3.fromRGB(100, 100, 150)
+    line.BackgroundTransparency = transparency or CONFIG.CONNECTION_TRANSPARENCY
+    line.BorderSizePixel = CONFIG.CONNECTION_BORDER_THICKNESS
+    line.ZIndex = 1 -- ConnectionsLayer is ZIndex 1 (default), NodesLayer is ZIndex 2.
+                   -- This line ZIndex is relative to other lines in ConnectionsLayer.
+    
+    -- Store the directed connection
+    local key = nodeId1 .. "->" .. nodeId2
     AstralWebState.NodeConnections[key] = line
+end
+
+function CreateDirectedNodeConnections()
+    print("🔗 Creating directed node connections (DAG)...")
+    -- Clear previous connections
+    for key, line in pairs(AstralWebState.NodeConnections) do
+        if typeof(line) == "Instance" then
+            line:Destroy()
+        end
+        AstralWebState.NodeConnections[key] = nil
+    end
+    AstralWebState.NodeConnections = {}
+
+    local MAX_OUTGOING_PER_NODE_DAG = 3 -- Max branches a single node can lead to
+    local MIN_SHARED_TAGS_FOR_CONNECTION = 1 -- Minimum shared tags to form a connection
+
+    local allComponentsData = AstralWebState.AllComponents -- This should be a list of {Id, Component} tables
+
+    for _, sourceDataWrapper in ipairs(allComponentsData) do
+        local sourceId = sourceDataWrapper.Id
+        local sourceComponent = sourceDataWrapper.Component -- This is the actual component data from SynergyComponentsDB
+        
+        if not sourceComponent then
+            print("Warning: Missing sourceComponent for ID:", sourceId)
+            continue
+        end
+
+        local sourceRarityTier = GetRarityTier(sourceComponent.Rarity)
+        local outgoingCount = 0
+
+        if sourceRarityTier == nil then -- Use nil check as GetRarityTier might return nil if not found
+            print("Warning: Unknown rarity tier for source component:", sourceId, sourceComponent.Rarity)
+            continue
+        end
+
+        for _, targetDataWrapper in ipairs(allComponentsData) do
+            if outgoingCount >= MAX_OUTGOING_PER_NODE_DAG then
+                break -- Stop trying to find targets for this source if max outgoing is reached
+            end
+
+            local targetId = targetDataWrapper.Id
+            if sourceId == targetId then
+                continue -- Don't connect to self
+            end
+
+            local targetComponent = targetDataWrapper.Component
+            if not targetComponent then
+                print("Warning: Missing targetComponent for ID:", targetId)
+                continue
+            end
+
+            local targetRarityTier = GetRarityTier(targetComponent.Rarity)
+            if targetRarityTier == nil then
+                print("Warning: Unknown rarity tier for target component:", targetId, targetComponent.Rarity)
+                continue
+            end
+
+            -- Condition 1: Directed Flow - Target must be exactly one tier higher
+            if not (targetRarityTier == sourceRarityTier + 1) then
+                continue
+            end
+
+            -- Condition 2: Synergy Check - Must share at least MIN_SHARED_TAGS_FOR_CONNECTION
+            local sharedTags = 0
+            if sourceComponent.Tags and targetComponent.Tags then
+                for _, tag1 in pairs(sourceComponent.Tags) do
+                    if table.find(targetComponent.Tags, tag1) then
+                        sharedTags = sharedTags + 1
+                    end
+                end
+            end
+            
+            if sharedTags < MIN_SHARED_TAGS_FOR_CONNECTION then
+                continue
+            end
+
+            -- Condition 3: Avoid Duplicate Edges (if somehow this loop could produce it, though direct key should prevent)
+            local connectionKey = sourceId .. "->" .. targetId
+            if AstralWebState.NodeConnections[connectionKey] then
+                continue
+            end
+            
+            -- Create the visual line and store it
+            CreateConnectionLine(sourceId, targetId, CONFIG.CONNECTION_TRANSPARENCY) 
+            outgoingCount = outgoingCount + 1
+        end
+    end
+    local count = 0
+    for _, _ in pairs(AstralWebState.NodeConnections) do
+        count = count + 1
+    end
+    print(("✅ Created %d directed connections."):format(count))
 end
 
 -- ========================================
@@ -560,17 +700,6 @@ function CreateSequenceBuilder()
     sequencePanel.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
     sequencePanel.BorderSizePixel = 0
     sequencePanel.Parent = AstralWebState.MainFrame
-    
-    -- Title
-    local titleLabel = Instance.new("TextLabel")
-    titleLabel.Size = UDim2.new(0.3, 0, 0, 30)
-    titleLabel.Position = UDim2.new(0, 20, 0, 10)
-    titleLabel.BackgroundTransparency = 1
-    titleLabel.Text = "ASTRAL WEB SEQUENCE"
-    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    titleLabel.TextScaled = true
-    titleLabel.Font = Enum.Font.SourceSansBold
-    titleLabel.Parent = sequencePanel
     
     -- Sequence slots container
     local slotsContainer = Instance.new("Frame")
@@ -813,7 +942,7 @@ end
 function SetupPanning()
     local viewport = AstralWebState.GraphViewport
     local canvas = AstralWebState.GraphCanvas
-    local scale = AstralWebState.GraphScale
+    local scale = AstralWebState.GraphScale -- Renamed from graphScale for clarity with UIScale instance
 
     viewport.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton2 or
@@ -841,11 +970,57 @@ function SetupPanning()
             )
         elseif input.UserInputType == Enum.UserInputType.MouseWheel then
             local zoomDelta = math.sign(input.Position.Z)
-            local newZoom = math.clamp(AstralWebState.ZoomLevel + zoomDelta * CONFIG.ZOOM_STEP,
+            local oldZoom = AstralWebState.ZoomLevel
+            local newZoom = math.clamp(oldZoom + zoomDelta * CONFIG.ZOOM_STEP,
                 CONFIG.MIN_ZOOM, CONFIG.MAX_ZOOM)
-            if newZoom ~= AstralWebState.ZoomLevel then
+
+            if newZoom ~= oldZoom then
+                local mouseLocation = UserInputService:GetMouseLocation() -- Screen coordinates of mouse
+
+                -- Canvas position components relative to its parent (GraphViewport)
+                local canvasPosScaleUDim = canvas.Position.X.Scale -- Assuming X and Y scales are the same
+                local canvasPosOffsetXOld = canvas.Position.X.Offset
+                local canvasPosOffsetYOld = canvas.Position.Y.Offset
+
+                -- Absolute position of the GraphViewport
+                local viewportAbsPos = viewport.AbsolutePosition
+                local viewportAbsSize = viewport.AbsoluteSize
+                
+                -- The canvas's absolute top-left corner position BEFORE zoom
+                local canvasAbsPosXOld = viewportAbsPos.X + (viewportAbsSize.X * canvasPosScaleUDim) + canvasPosOffsetXOld
+                local canvasAbsPosYOld = viewportAbsPos.Y + (viewportAbsSize.Y * canvasPosScaleUDim) + canvasPosOffsetYOld
+                local canvasAbsPosOld = Vector2.new(canvasAbsPosXOld, canvasAbsPosYOld)
+                
+                -- Mouse position relative to the canvas's absolute top-left corner (scaled content)
+                local mouseRelativeToCanvasAbsOld = mouseLocation - canvasAbsPosOld
+                
+                -- The point on the canvas's unscaled content that is under the mouse
+                local focalPointOnCanvasUnscaled = mouseRelativeToCanvasAbsOld / oldZoom
+
+                -- Update zoom state and apply UIScale
                 AstralWebState.ZoomLevel = newZoom
                 scale.Scale = newZoom
+
+                -- After UIScale changes, canvas.AbsoluteSize effectively changes.
+                -- We want the focalPointOnCanvasUnscaled (which is in the canvas's internal coordinate system)
+                -- to remain at the same screen position (mouseLocation).
+                -- The new absolute screen position of the canvas's top-left corner should be:
+                -- newCanvasAbsPos = mouseLocation - (focalPointOnCanvasUnscaled * newZoom)
+                
+                -- Convert this new absolute screen position back to a UDim2 offset for the canvas,
+                -- relative to the viewport's origin and scaled portion.
+                local newCanvasAbsTargetX = mouseLocation.X - (focalPointOnCanvasUnscaled.X * newZoom)
+                local newCanvasAbsTargetY = mouseLocation.Y - (focalPointOnCanvasUnscaled.Y * newZoom)
+
+                local newCanvasOffsetX = newCanvasAbsTargetX - viewportAbsPos.X - (viewportAbsSize.X * canvasPosScaleUDim)
+                local newCanvasOffsetY = newCanvasAbsTargetY - viewportAbsPos.Y - (viewportAbsSize.Y * canvasPosScaleUDim)
+
+                canvas.Position = UDim2.new(
+                    canvas.Position.X.Scale, -- Keep the scale part of the UDim2 the same
+                    newCanvasOffsetX,
+                    canvas.Position.Y.Scale, -- Keep the scale part of the UDim2 the same
+                    newCanvasOffsetY
+                )
             end
         end
     end)
@@ -1289,6 +1464,7 @@ function ShowNotification(text, color)
     label.Text = text
     label.TextColor3 = Color3.fromRGB(255, 255, 255)
     label.TextScaled = true
+    label.ZIndex = 11
     label.Font = Enum.Font.SourceSansBold
     label.Parent = notification
     
@@ -1358,5 +1534,3 @@ wait(1)
 
 -- Initialize the astral web
 InitializeAstralWeb()
-
-print("✅ AstralWebClient loaded")
