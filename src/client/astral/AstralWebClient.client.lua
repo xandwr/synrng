@@ -575,12 +575,13 @@ function CreateConnectionLine(nodeId1, nodeId2, transparency)
     -- though usually Roblox handles it. Let's be safe.
     line.Parent = AstralWebState.ConnectionsLayer 
 
-    line.AnchorPoint = Vector2.new(0, 0)
-    
+    -- Anchor at the left center so rotation pivots around the source node
+    line.AnchorPoint = Vector2.new(0, 0.5)
+
     -- Position this AnchorPoint at the center of the source node (x1, y1)
-    -- These x1, y1 values are pixel offsets in the unscaled GraphCanvas space.
-    -- UIScale on ConnectionsLayer's parent will handle scaling these values visually.
-    line.Position = UDim2.new(0, x1, 0, y1 - CONFIG.CONNECTION_THICKNESS/2)
+    -- Coordinates are in the unscaled GraphCanvas space. UIScale on the parent
+    -- will handle visual scaling.
+    line.Position = UDim2.new(0, x1, 0, y1)
     line.Size     = UDim2.new(0, distance, 0, CONFIG.CONNECTION_THICKNESS)
     line.Rotation = angleDegrees
     
