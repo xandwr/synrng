@@ -501,13 +501,20 @@ function ConnectionExists(id1, id2)
 end
 
 function CreateConnectionLine(nodeId1, nodeId2, transparency)
-    local pos1 = AstralWebState.NodePositions[nodeId1]
-    local pos2 = AstralWebState.NodePositions[nodeId2]
-    
-    if not pos1 or not pos2 then return end
-    
-    local x1, y1 = pos1.X, pos1.Y
-    local x2, y2 = pos2.X, pos2.Y
+    local nodeFrame1 = AstralWebState.NodeFrames[nodeId1]
+    local nodeFrame2 = AstralWebState.NodeFrames[nodeId2]
+
+    if not nodeFrame1 or not nodeFrame2 then return end
+
+    local canvasAbs = AstralWebState.GraphCanvas.AbsolutePosition
+
+    local center1 = nodeFrame1.AbsolutePosition + (nodeFrame1.AbsoluteSize / 2)
+    local center2 = nodeFrame2.AbsolutePosition + (nodeFrame2.AbsoluteSize / 2)
+
+    local x1 = center1.X - canvasAbs.X
+    local y1 = center1.Y - canvasAbs.Y
+    local x2 = center2.X - canvasAbs.X
+    local y2 = center2.Y - canvasAbs.Y
     
     local distance = math.sqrt((x2-x1)^2 + (y2-y1)^2)
     local angle = math.atan2(y2-y1, x2-x1)
@@ -812,28 +819,25 @@ end
 function SetupPanning()
     local viewport = AstralWebState.GraphViewport
     local canvas = AstralWebState.GraphCanvas
-    
+
     viewport.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton2 or -- Right click
+        if input.UserInputType == Enum.UserInputType.MouseButton2 or
            (input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)) then
             AstralWebState.IsPanning = true
-            AstralWebState.PanStartPos = Vector2.new(mouse.X, mouse.Y)
+            AstralWebState.PanStartPos = input.Position
             AstralWebState.CanvasStartPos = canvas.Position
         end
     end)
-    
+
     viewport.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton2 or
-           input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.MouseButton1 then
             AstralWebState.IsPanning = false
         end
     end)
-    
+
     UserInputService.InputChanged:Connect(function(input)
         if AstralWebState.IsPanning and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local currentPos = Vector2.new(mouse.X, mouse.Y)
-            local delta = currentPos - AstralWebState.PanStartPos
-            
+            local delta = input.Position - AstralWebState.PanStartPos
             canvas.Position = UDim2.new(
                 AstralWebState.CanvasStartPos.X.Scale,
                 AstralWebState.CanvasStartPos.X.Offset + delta.X,
