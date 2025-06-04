@@ -6,6 +6,7 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
 local SoundService = game:GetService("SoundService")
 
 local player = Players.LocalPlayer
@@ -45,6 +46,11 @@ local CONFIG = {
     -- UI Layout
     SEQUENCE_PANEL_HEIGHT = 150,
     INFO_PANEL_WIDTH = 350,
+
+    -- Zoom
+    MIN_ZOOM = 0.5,
+    MAX_ZOOM = 2.0,
+    ZOOM_STEP = 0.1,
 }
 
 -- ========================================
@@ -79,6 +85,9 @@ local AstralWebState = {
     SequencePanel = nil,
     InfoPanel = nil,
     RollButton = nil,
+
+    GraphScale = nil,
+    ZoomLevel = 1,
     
     -- Camera/Panning
     IsPanning = false,
@@ -192,6 +201,10 @@ function CreateMainUI()
     graphCanvas.Position = UDim2.new(0.5, -CONFIG.GRAPH_RADIUS * 3, 0.5, -CONFIG.GRAPH_RADIUS * 3)
     graphCanvas.BackgroundTransparency = 1
     graphCanvas.Parent = graphViewport
+
+    local graphScale = Instance.new("UIScale")
+    graphScale.Name = "GraphScale"
+    graphScale.Parent = graphCanvas
     
     -- Add starfield background to viewport
     CreateStarfieldBackground(graphViewport)
@@ -215,6 +228,7 @@ function CreateMainUI()
     AstralWebState.MainFrame = mainFrame
     AstralWebState.GraphViewport = graphViewport
     AstralWebState.GraphCanvas = graphCanvas
+    AstralWebState.GraphScale = graphScale
     AstralWebState.ConnectionsLayer = connectionsLayer
     AstralWebState.NodesLayer = nodesLayer
     AstralWebState.GraphCenter = Vector2.new(CONFIG.GRAPH_RADIUS * 3, CONFIG.GRAPH_RADIUS * 3)
@@ -302,9 +316,7 @@ function BuildNodeGraph()
         end
     end
     
-    -- Create connections after all nodes are placed
-    wait(0.1) -- Small delay to ensure all nodes are created
-    CreateNodeConnections()
+    -- Connections temporarily disabled
 end
 
 function CreateNodeFrame(componentData, position)
@@ -577,25 +589,7 @@ function CreateSequenceBuilder()
         local slot = CreateSequenceSlot(i, slotsContainer, startX + (i-1) * (CONFIG.SLOT_SIZE + slotSpacing))
         AstralWebState.SequenceSlots[i] = slot
     end
-    
-    -- Submit button
-    local submitButton = Instance.new("TextButton")
-    submitButton.Name = "SubmitButton"
-    submitButton.Size = UDim2.new(0, 150, 0, 40)
-    submitButton.Position = UDim2.new(1, -170, 0.5, -20)
-    submitButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-    submitButton.Text = "SUBMIT WEB"
-    submitButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    submitButton.TextScaled = true
-    submitButton.Font = Enum.Font.SourceSansBold
-    submitButton.Parent = sequencePanel
-    
-    local submitCorner = Instance.new("UICorner")
-    submitCorner.CornerRadius = UDim.new(0, 8)
-    submitCorner.Parent = submitButton
-    
-    submitButton.MouseButton1Click:Connect(SubmitSequence)
-    
+
     AstralWebState.SequencePanel = sequencePanel
 end
 
@@ -819,6 +813,7 @@ end
 function SetupPanning()
     local viewport = AstralWebState.GraphViewport
     local canvas = AstralWebState.GraphCanvas
+    local scale = AstralWebState.GraphScale
 
     viewport.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton2 or
@@ -844,8 +839,25 @@ function SetupPanning()
                 AstralWebState.CanvasStartPos.Y.Scale,
                 AstralWebState.CanvasStartPos.Y.Offset + delta.Y
             )
+        elseif input.UserInputType == Enum.UserInputType.MouseWheel then
+            local zoomDelta = math.sign(input.Position.Z)
+            local newZoom = math.clamp(AstralWebState.ZoomLevel + zoomDelta * CONFIG.ZOOM_STEP,
+                CONFIG.MIN_ZOOM, CONFIG.MAX_ZOOM)
+            if newZoom ~= AstralWebState.ZoomLevel then
+                AstralWebState.ZoomLevel = newZoom
+                scale.Scale = newZoom
+            end
         end
     end)
+
+    -- Prevent default camera actions while web is open
+    ContextActionService:BindAction(
+        "AWBlockCamera",
+        function() return Enum.ContextActionResult.Sink end,
+        false,
+        Enum.UserInputType.MouseButton2,
+        Enum.UserInputType.MouseWheel
+    )
 end
 
 -- ========================================
@@ -915,6 +927,8 @@ function AddToSequence(componentData)
     end
     
     ShowNotification(string.format("Added %s to position %d", componentData.Component.Name, emptySlot), Color3.fromRGB(100, 255, 100))
+
+    SubmitSequence()
 end
 
 function RemoveFromSequence(index)
@@ -937,6 +951,8 @@ function RemoveFromSequence(index)
     end
     
     ShowNotification(string.format("Removed %s from sequence", seqData.Component.Name), Color3.fromRGB(255, 150, 50))
+
+    SubmitSequence()
 end
 
 function OnSlotClicked(index, slot)
